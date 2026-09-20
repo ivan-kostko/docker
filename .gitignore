@@ -1,0 +1,2 @@
+# Shell history bind-mounted into the dev container
+.devcontainer/.zsh_history
