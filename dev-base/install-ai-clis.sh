@@ -38,5 +38,7 @@ chmod +x "${BIN_DIR}/codex"
 rm -rf /tmp/codex.tar.gz /tmp/codex-dl
 
 ### Ensure ~/.local/bin is on PATH for zsh (idempotent) ###
+# Single quotes are intentional: $HOME/$PATH must expand when zsh starts, not now.
+# shellcheck disable=SC2016
 grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "${HOME_DIR}/.zshrc" \
   || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "${HOME_DIR}/.zshrc"
