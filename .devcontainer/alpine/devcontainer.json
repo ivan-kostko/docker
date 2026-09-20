@@ -16,13 +16,10 @@
   "runArgs": [
     "--security-opt", "seccomp=unconfined"
   ],
-  "features": {
-    // Gives the container a `docker` CLI wired to the HOST's Docker daemon,
-    // so `docker build` / `docker buildx bake` inside this devcontainer
-    // actually build and are visible to `docker images` on your host too.
-    // No nested daemon, no extra resource overhead.
-    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
-  },
+  // No "features" block here — docker-outside-of-docker doesn't support
+  // Alpine. docker-cli/buildx/compose come from apk instead (see
+  // packages-alpine.txt); the mount + postStartCommand below replicate
+  // what the feature would otherwise do at container start.
   "containerEnv": {},
   "mounts": [
     // SSH keys
@@ -36,7 +33,9 @@
     // No point to play sandbox - just mount whole folder!
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gnupg/,target=/home/vscode/.gnupg/,type=bind",
     // ZSH history
-    "source=${localWorkspaceFolder}/.devcontainer/.zsh_history,target=/home/vscode/.zsh_history,type=bind,consistency=cached"
+    "source=${localWorkspaceFolder}/.devcontainer/.zsh_history,target=/home/vscode/.zsh_history,type=bind,consistency=cached",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude,target=/home/vscode/.claude,type=bind,consistency=cached",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude.json,target=/home/vscode/.claude.json,type=bind,consistency=cached"
   ],
   "postStartCommand": "pre-commit install",
   "customizations": {

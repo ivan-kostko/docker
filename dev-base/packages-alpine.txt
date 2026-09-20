@@ -15,4 +15,8 @@ sed
 unzip
 zlib-dev
 shellcheck
+docker-cli
+docker-cli-buildx
+docker-cli-compose
+sudo
 zsh

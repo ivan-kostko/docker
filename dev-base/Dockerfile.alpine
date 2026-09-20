@@ -16,7 +16,9 @@ RUN apk update \
     && apk upgrade --no-cache \
     && grep -Ev '^\s*#|^\s*$' /tmp/packages.txt | xargs apk add --no-cache \
     && rm -f /tmp/packages.txt \
-    && adduser -D -s /usr/bin/zsh -u "${USER_UID}" "${USER_NAME}"
+    && adduser -D -s /usr/bin/zsh -u "${USER_UID}" "${USER_NAME}" \
+    && echo "${USER_NAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/${USER_NAME} \
+    && chmod 0440 /etc/sudoers.d/${USER_NAME}
 
 USER $USER_NAME
 
