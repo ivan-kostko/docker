@@ -9,12 +9,12 @@ SHELL ["/bin/bash", "-eu", "-o", "pipefail", "-c"]
 
 COPY packages-debian.txt /tmp/packages.txt
 RUN apt-get update \
- && apt-get upgrade --yes \
- && xargs -a /tmp/packages.txt apt-get --no-install-recommends --yes install \
- && apt-get --purge --yes autoremove \
- && apt-get --yes clean \
- && rm -rf /var/lib/apt/lists/* \
- && adduser --force-badname --disabled-login --disabled-password --gecos '' --uid "${USER_UID}" $USER_NAME
+    && apt-get upgrade --yes \
+    && xargs -a /tmp/packages.txt apt-get --no-install-recommends --yes install \
+    && apt-get --purge --yes autoremove \
+    && apt-get --yes clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && adduser --force-badname --disabled-login --disabled-password --gecos '' --uid "${USER_UID}" $USER_NAME
 
 USER $USER_NAME
 

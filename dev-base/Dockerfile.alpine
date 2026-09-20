@@ -13,10 +13,10 @@ SHELL ["/bin/sh", "-eu", "-c"]
 
 COPY packages-alpine.txt /tmp/packages.txt
 RUN apk update \
- && apk upgrade --no-cache \
- && grep -Ev '^\s*#|^\s*$' /tmp/packages.txt | xargs apk add --no-cache \
- && rm -f /tmp/packages.txt \
- && adduser -D -s /usr/bin/zsh -u "${USER_UID}" "${USER_NAME}"
+    && apk upgrade --no-cache \
+    && grep -Ev '^\s*#|^\s*$' /tmp/packages.txt | xargs apk add --no-cache \
+    && rm -f /tmp/packages.txt \
+    && adduser -D -s /usr/bin/zsh -u "${USER_UID}" "${USER_NAME}"
 
 USER $USER_NAME
 

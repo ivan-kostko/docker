@@ -1,0 +1,68 @@
+{
+  "name": "Docker Alpine Dev",
+  "build": {
+    "dockerfile": "../../dev-base/Dockerfile.alpine",
+    // "args": {
+    //   // Matches the container user's UID to your host UID so bind-mounted
+    //   // files (SSH keys, GPG, workspace) aren't owned by a mismatched user.
+    //   // On macOS/Linux this resolves from your shell; on Windows it's
+    //   // usually 1000 anyway since WSL2 users typically are.
+    //   "USER_UID": "${localEnv:UID}"
+    // },
+    "context": "../../dev-base"
+  },
+  "remoteUser": "vscode",
+  "updateRemoteUserUID": true,   // this is the default, but explicit is clearer here
+  "runArgs": [
+    "--security-opt", "seccomp=unconfined"
+  ],
+  "features": {
+    // Gives the container a `docker` CLI wired to the HOST's Docker daemon,
+    // so `docker build` / `docker buildx bake` inside this devcontainer
+    // actually build and are visible to `docker images` on your host too.
+    // No nested daemon, no extra resource overhead.
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
+  },
+  "containerEnv": {},
+  "mounts": [
+    // SSH keys
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached",
+    // Git config
+    // NB: ~/.gitconfig is magicly mounted into /home/vscode/ by VSCode. No real need to mount it separately.
+    // !!!!!!!!!!!!!!!!!!!!!!
+    // Uncomment and edit next line if you have imports in your ~/.gitconfig
+    // "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gitconfig-myown,target=/home/vscode/.gitconfig-myown,type=bind,consistency=cached",
+    // GPG keys
+    // No point to play sandbox - just mount whole folder!
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gnupg/,target=/home/vscode/.gnupg/,type=bind",
+    // ZSH history
+    "source=${localWorkspaceFolder}/.devcontainer/.zsh_history,target=/home/vscode/.zsh_history,type=bind,consistency=cached"
+  ],
+  "postStartCommand": "pre-commit install",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+          "streetsidesoftware.code-spell-checker",
+          "shardulm94.trailing-spaces",
+          "ms-vscode-remote.remote-containers",
+          "ms-azuretools.vscode-docker",
+          "adamhartford.vscode-base64",
+          "redhat.vscode-yaml",
+          "ms-vscode.makefile-tools",
+          "formulahendry.docker-extension-pack",
+          "henriiik.docker-linter",
+          "yzane.markdown-pdf",
+          "breaking-point.vsc-postman",
+          "Anthropic.claude-code",
+          "dbaeumer.vscode-eslint"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "terminal.integrated.profiles.linux": {
+          "bash": null
+        },
+        "terminal.integrated.fontFamily": "MesloLGS NF, Regular"
+      }
+    }
+  }
+}
