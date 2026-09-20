@@ -1,0 +1,17 @@
+bash
+build-base
+ca-certificates
+curl
+git
+gnupg
+jq
+less
+libgcc
+libstdc++
+openssh-client
+pre-commit
+ripgrep
+sed
+unzip
+zlib-dev
+zsh

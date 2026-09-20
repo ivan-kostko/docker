@@ -1,0 +1,15 @@
+apt-transport-https
+build-essential
+ca-certificates
+git
+curl
+gnupg2
+jq
+less
+lsb-release
+software-properties-common
+unzip
+openssh-client
+zsh
+zlib1g-dev
+pre-commit

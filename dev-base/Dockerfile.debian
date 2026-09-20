@@ -1,0 +1,31 @@
+# docker/base/Dockerfile.debian
+ARG BASE_IMAGE="debian:bookworm"
+FROM ${BASE_IMAGE} AS devbase
+
+ARG USER_UID=1000
+ARG USER_NAME=vscode
+
+SHELL ["/bin/bash", "-eu", "-o", "pipefail", "-c"]
+
+COPY packages-debian.txt /tmp/packages.txt
+RUN apt-get update \
+ && apt-get upgrade --yes \
+ && xargs -a /tmp/packages.txt apt-get --no-install-recommends --yes install \
+ && apt-get --purge --yes autoremove \
+ && apt-get --yes clean \
+ && rm -rf /var/lib/apt/lists/* \
+ && adduser --force-badname --disabled-login --disabled-password --gecos '' --uid "${USER_UID}" $USER_NAME
+
+USER $USER_NAME
+
+ADD --chown=${USER_NAME} https://gist.githubusercontent.com/ivan-kostko/2356a782a40be65b432a9fdbc67845cd/raw/59468eb3935bf1141437d96d3dfcecef277c4331/p10k.zsh /home/$USER_NAME/.p10k.zsh
+ADD --chown=${USER_NAME} https://github.com/romkatv/powerlevel10k-media/raw/master/MesloLGS%20NF%20Regular.ttf /home/$USER_NAME/.fonts/
+ADD --chown=${USER_NAME} https://github.com/romkatv/powerlevel10k-media/raw/master/MesloLGS%20NF%20Bold.ttf /home/$USER_NAME/.fonts/
+ADD --chown=${USER_NAME} https://github.com/romkatv/powerlevel10k-media/raw/master/MesloLGS%20NF%20Italic.ttf /home/$USER_NAME/.fonts/
+ADD --chown=${USER_NAME} https://github.com/romkatv/powerlevel10k-media/raw/master/MesloLGS%20NF%20Bold%20Italic.ttf /home/$USER_NAME/.fonts/
+
+COPY --chown=${USER_NAME} --chmod=0755 setup.sh /tmp/setup.sh
+RUN /tmp/setup.sh $USER_NAME
+
+COPY --chown=${USER_NAME} --chmod=0755 install-ai-clis.sh /tmp/install-ai-clis.sh
+RUN /tmp/install-ai-clis.sh $USER_NAME
