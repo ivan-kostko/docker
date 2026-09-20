@@ -45,14 +45,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Hadolint (Dockerfile.debian)
-        uses: hadolint/hadolint-action@v3.1.0
+        uses: hadolint/hadolint-action@v3.5.0
         with:
           dockerfile: dev-base/Dockerfile.debian
           # Only hard errors fail the build; unpinned-package style warnings don't.
           failure-threshold: error
 
       - name: Hadolint (Dockerfile.alpine)
-        uses: hadolint/hadolint-action@v3.1.0
+        uses: hadolint/hadolint-action@v3.5.0
         with:
           dockerfile: dev-base/Dockerfile.alpine
           failure-threshold: error
