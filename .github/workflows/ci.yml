@@ -1,0 +1,142 @@
+name: CI/CD
+
+# Builds the dev-base images (Debian + Alpine, amd64 + arm64).
+#   - pull requests:  lint + build only (nothing is pushed)
+#   - push to master: build and publish to GHCR
+#   - v* tags:        build and publish with version tags
+#   - weekly cron:    rebuild to pick up base-image / OS / CLI updates
+#   - manual:         workflow_dispatch (set "publish" to push)
+#
+# Everything here is free for public repositories: GitHub Actions minutes,
+# the GitHub Actions cache and GHCR storage/bandwidth for public packages.
+
+on:
+  pull_request:
+    paths:
+      - "dev-base/**"
+      - ".github/workflows/ci.yml"
+  push:
+    branches: [master]
+    tags: ["v*.*.*"]
+  schedule:
+    - cron: "0 4 * * 1" # Mondays 04:00 UTC
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Push images to GHCR"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: dev-base
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Hadolint (Dockerfile.debian)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: dev-base/Dockerfile.debian
+          # Only hard errors fail the build; unpinned-package style warnings don't.
+          failure-threshold: error
+
+      - name: Hadolint (Dockerfile.alpine)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: dev-base/Dockerfile.alpine
+          failure-threshold: error
+
+      - name: ShellCheck
+        run: shellcheck dev-base/*.sh
+
+  build:
+    needs: lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write     # build provenance
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [debian, alpine]
+    env:
+      PUSH: >-
+        ${{ github.event_name != 'pull_request'
+            && (github.event_name != 'workflow_dispatch' || inputs.publish) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute lowercase image name
+        id: image
+        run: echo "name=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: env.PUSH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.name }}
+          flavor: latest=false
+          tags: |
+            # rolling tag for the variant, e.g. :debian
+            type=raw,value=${{ matrix.variant }},enable=${{ github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch }}
+            # dated snapshot, e.g. :debian-20260920
+            type=raw,value=${{ matrix.variant }}-{{date 'YYYYMMDD'}},enable=${{ github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch }}
+            # release tags, e.g. :debian-1.2.3 and :debian-1.2
+            type=semver,pattern={{version}},prefix=${{ matrix.variant }}-
+            type=semver,pattern={{major}}.{{minor}},prefix=${{ matrix.variant }}-
+            # commit pinned, e.g. :debian-sha-abc1234
+            type=sha,prefix=${{ matrix.variant }}-sha-
+            # :latest is the Debian variant
+            type=raw,value=latest,enable=${{ matrix.variant == 'debian' && github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch }}
+          labels: |
+            org.opencontainers.image.title=dev-base (${{ matrix.variant }})
+            org.opencontainers.image.description=Dev container base image (${{ matrix.variant }})
+
+      - name: Build${{ env.PUSH == 'true' && ' and push' || '' }}
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: dev-base
+          file: dev-base/Dockerfile.${{ matrix.variant }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ env.PUSH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Base image / package updates are wanted on scheduled rebuilds.
+          pull: true
+          no-cache: ${{ github.event_name == 'schedule' }}
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,scope=${{ matrix.variant }},mode=max
+
+      - name: Attest build provenance
+        if: env.PUSH == 'true'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
