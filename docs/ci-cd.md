@@ -66,16 +66,42 @@ fresh on every run.
 | Setting | Values | Default | Meaning |
 |---|---|---|---|
 | `VULN_FAIL_ON` | `none`, `critical`, `high` | `critical` | `critical`: block on Critical, report High as a warning. `high`: block on both. `none`: report only |
-| `VULN_IGNORE_UNFIXED` | `true`, `false` | `false` | `true`: findings with no available fix never block (still reported) |
+| `VULN_IGNORE_UNFIXED` | `true`, `false` | `true` (CI) | `true`: findings with no available fix (distro "won't fix" / "not fixed") never block, but stay in the reports and warnings. `false`: block on those too |
 
-Set them as repository variables (Settings → Secrets and variables → Actions → Variables); no code change needed. The
-same threshold applies to `verify` (a PR sees what publish would do) and to `publish`. Plan: start with `critical`, move
-to `high` once the High backlog is understood. If an unfixable upstream Critical blocks everything, set
-`VULN_IGNORE_UNFIXED=true` (preferred) or, temporarily, `VULN_FAIL_ON=none`.
-Logic: [`scripts/check-vuln-threshold.sh`](../scripts/check-vuln-threshold.sh) (tested by `scripts/tests/`).
+**Effective default: a Critical blocks only if a fix exists.** Unfixed findings cannot be fixed by rebuilding (the first PR
+run showed 51 of them in Debian bookworm: perl, curl, glibc, zlib, ... none with a fix), and blocking on them would mean
+Debian can never be released. They are still listed (`::warning::`, artifacts, SARIF), and `apt-get upgrade` /
+`apk upgrade` run on every build, so a fixable Critical means the build is stale. Set the repository variables
+(Settings → Secrets and variables → Actions → Variables) to change this; no code change needed. The same threshold
+applies to `verify` (a PR sees what publish would do) and to `publish`. Plan: start with `critical`, move to `high` once
+the High backlog is understood.
+
+### Reviewed, time-boxed exceptions
+
+For a Critical that **has** an upstream fix but no package to install yet (e.g. a Go library vendored inside a distro
+binary), use [`.github/vuln-exceptions.json`](../.github/vuln-exceptions.json) (code-owned) instead of loosening the
+threshold. Each entry is scoped and expires:
+
+```json
+{ "ids": ["GHSA-..."], "package": "golang.org/x/crypto",
+  "locations": ["/usr/libexec/docker/cli-plugins/docker-buildx"],   // exact path, or prefix ending in *
+  "variants": ["alpine"], "reason": "why, and who re-assesses it (>= 20 chars)", "expires": "2026-11-20" }
+```
+
+- A finding is excepted only if id + package match **and every file it was found in** is covered; a copy of the same
+  library elsewhere still blocks.
+- After `expires` the exception silently stops applying, a `::warning::` says so, and the findings block again. Renew
+  only with a fresh review, or delete the entry once the distro ships a fixed package.
+- Applied exceptions are always printed and added to the run summary; they are never silent.
+- Currently: Alpine 3.23's `docker-cli-buildx` / `docker-cli-compose` plugins vendor `golang.org/x/crypto` and
+  `google.golang.org/grpc` versions with Critical advisories (fixed upstream, not yet rebuilt by Alpine; still present in
+  3.24, clean in edge). 16 findings, exception valid until 2026-11-20.
+
+Logic: [`scripts/check-vuln-threshold.sh`](../scripts/check-vuln-threshold.sh), tested in `scripts/tests/`
+(including that the committed exception file is valid).
 
 Coverage: **both linux/amd64 and linux/arm64** are scanned in `verify` (before merge, read-only token, no registry login,
-nothing pushed) with the same threshold, so a Critical in either platform fails `verify` and therefore the `CI gate`. In
+nothing pushed) with the same threshold, so a blocking Critical in either platform fails `verify` and therefore the `CI gate`. In
 `verify` each platform is exported as a Docker archive and scanned from the extras image; in `publish` the pushed
 digests are scanned from the registry.
 
@@ -96,6 +122,13 @@ Known constraint: **native platform only.** The runner is linux/amd64, so smoke 
 SBOM-scanned before merge and again on the pushed digest at publish, but its binaries are never executed in CI. (Scanning
 is static analysis of an exported archive and needs no emulation.) Native arm64 runners
 (`ubuntu-24.04-arm`) would remove the gap at the cost of restructuring the multi-platform publish.
+
+## Runner and actions
+
+Jobs run on `ubuntu-24.04` (pinned instead of `ubuntu-latest`, which moves to Ubuntu 26 on 2026-10-19; adopt it
+deliberately). All actions run on Node 24: checkout v7, setup-qemu v4, setup-buildx v4, login v4, metadata v6, and
+`actions/attest` (which replaces the deprecated `actions/attest-sbom`). Attestations set `create-storage-record: false`
+so the publish job does not need `artifact-metadata: write`.
 
 ## Attestations
 

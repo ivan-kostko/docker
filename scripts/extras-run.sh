@@ -8,7 +8,8 @@
 # Runs as root (EXTRAS_USER to change): the workspace on a CI runner is owned
 # by a different uid than the image's `vscode` user. The image is a throwaway
 # toolbox container; the product image is never run this way.
-# Passed through: VULN_FAIL_ON, VULN_IGNORE_UNFIXED, GITHUB_STEP_SUMMARY (file
+# Passed through: VULN_FAIL_ON, VULN_IGNORE_UNFIXED, VULN_EXCEPTIONS_FILE, VULN_VARIANT,
+# GITHUB_STEP_SUMMARY (file
 # is mounted so summaries written inside the container reach the job page).
 set -euo pipefail
 
@@ -30,7 +31,7 @@ args=(
   -e PRE_COMMIT_HOME=/home/vscode/.cache/pre-commit
   # The mounted workspace is owned by another uid.
   -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/workspace
-  -e VULN_FAIL_ON -e VULN_IGNORE_UNFIXED
+  -e VULN_FAIL_ON -e VULN_IGNORE_UNFIXED -e VULN_EXCEPTIONS_FILE -e VULN_VARIANT
 )
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   args+=(-v "${GITHUB_STEP_SUMMARY}:${GITHUB_STEP_SUMMARY}" -e GITHUB_STEP_SUMMARY)

@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "exceptions": [
+    {
+      "ids": [
+        "GHSA-5cgq-3rg8-m6cv",
+        "GHSA-89gr-r52h-f8rx",
+        "GHSA-f5wc-c3c7-36mc",
+        "GHSA-jppx-rxg9-jmrx",
+        "GHSA-rm3j-f69w-wqmq",
+        "GHSA-vgwf-h737-ff37",
+        "GHSA-x527-x647-q7gg"
+      ],
+      "package": "golang.org/x/crypto",
+      "locations": [
+        "/usr/libexec/docker/cli-plugins/docker-buildx",
+        "/usr/libexec/docker/cli-plugins/docker-compose"
+      ],
+      "variants": ["alpine"],
+      "reason": "Vendored in Alpine 3.23's docker-cli-buildx / docker-cli-compose plugin binaries (x/crypto v0.38/v0.42; fixed upstream in 0.52.0). Alpine has not rebuilt the packages (still affected in 3.24, clean only in edge). Accepted temporarily as a local-development client tool risk; owner to re-assess exposure at renewal and drop when Alpine ships rebuilt packages.",
+      "expires": "2026-11-20"
+    },
+    {
+      "ids": ["GHSA-p77j-4mvh-x3m3"],
+      "package": "google.golang.org/grpc",
+      "locations": [
+        "/usr/libexec/docker/cli-plugins/docker-buildx",
+        "/usr/libexec/docker/cli-plugins/docker-compose"
+      ],
+      "variants": ["alpine"],
+      "reason": "Vendored in Alpine 3.23's docker-cli-buildx / docker-cli-compose plugin binaries (grpc v1.74/v1.76; fixed upstream in 1.79.3). Alpine has not rebuilt the packages. Accepted temporarily as a local-development client tool risk; owner to re-assess exposure at renewal and drop when Alpine ships rebuilt packages.",
+      "expires": "2026-11-20"
+    }
+  ]
+}

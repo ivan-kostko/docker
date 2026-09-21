@@ -53,5 +53,6 @@ pullable without login.
 
 ## 7. Optional repository variables
 
-`VULN_FAIL_ON` (`none|critical|high`, default `critical`) and `VULN_IGNORE_UNFIXED` (`true|false`, default `false`);
-see [ci-cd.md](ci-cd.md#vulnerability-release-threshold).
+`VULN_FAIL_ON` (`none|critical|high`, default `critical`) and `VULN_IGNORE_UNFIXED` (`true|false`, default `true`: unfixed
+findings are reported but do not block); see [ci-cd.md](ci-cd.md#vulnerability-release-threshold). Reviewed vulnerability
+exceptions live in the code-owned `.github/vuln-exceptions.json`, not in settings.
