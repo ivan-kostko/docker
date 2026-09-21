@@ -1,0 +1,2 @@
+# Debian-only contract. Note: no Docker CLI here; the Debian devcontainer gets
+# it from the docker-outside-of-docker feature at container start.

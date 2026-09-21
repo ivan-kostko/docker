@@ -1,0 +1,9 @@
+# Repository development, test and scanning tools. They belong in the extras
+# image (extras/), never in the product: none of these may be on PATH.
+pre-commit
+shellcheck
+hadolint
+actionlint
+yamllint
+syft
+grype

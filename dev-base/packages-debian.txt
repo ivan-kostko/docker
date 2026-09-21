@@ -12,5 +12,3 @@ unzip
 openssh-client
 zsh
 zlib1g-dev
-shellcheck
-pre-commit

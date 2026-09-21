@@ -1,0 +1,5 @@
+# Build context is the repository root; only these files are needed.
+*
+!.pre-commit-config.yaml
+!extras/tools.env
+!extras/install-tools.sh

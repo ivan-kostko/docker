@@ -9,12 +9,10 @@ less
 libgcc
 libstdc++
 openssh-client
-pre-commit
 ripgrep
 sed
 unzip
 zlib-dev
-shellcheck
 docker-cli
 docker-cli-buildx
 docker-cli-compose

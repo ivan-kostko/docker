@@ -1,5 +1,7 @@
 # docker/base/Dockerfile.debian
-ARG BASE_IMAGE="debian:bookworm"
+# Pinned by digest; the tag is kept for readability. Update with
+# scripts/update-base-images.sh (docs/reproducibility.md).
+ARG BASE_IMAGE="debian:bookworm@sha256:f37a335e82bca302e955fa39f9dfe28f1be618f016f8a2b56318e5a5111afc26"
 FROM ${BASE_IMAGE} AS devbase
 
 ARG USER_UID=1000
@@ -14,18 +16,33 @@ RUN apt-get update \
     && apt-get --purge --yes autoremove \
     && apt-get --yes clean \
     && rm -rf /var/lib/apt/lists/* \
-    && adduser --force-badname --disabled-login --disabled-password --gecos '' --uid "${USER_UID}" $USER_NAME
+    && adduser --force-badname --disabled-login --disabled-password --gecos '' --uid "${USER_UID}" $USER_NAME \
+    && install -d -o "${USER_NAME}" /usr/local/share/dev-base
 
 USER $USER_NAME
 
-ADD --chown=${USER_NAME} https://gist.githubusercontent.com/ivan-kostko/2356a782a40be65b432a9fdbc67845cd/raw/59468eb3935bf1141437d96d3dfcecef277c4331/p10k.zsh /home/$USER_NAME/.p10k.zsh
-ADD --chown=${USER_NAME} https://github.com/romkatv/powerlevel10k-media/raw/master/MesloLGS%20NF%20Regular.ttf /home/$USER_NAME/.fonts/
-ADD --chown=${USER_NAME} https://github.com/romkatv/powerlevel10k-media/raw/master/MesloLGS%20NF%20Bold.ttf /home/$USER_NAME/.fonts/
-ADD --chown=${USER_NAME} https://github.com/romkatv/powerlevel10k-media/raw/master/MesloLGS%20NF%20Italic.ttf /home/$USER_NAME/.fonts/
-ADD --chown=${USER_NAME} https://github.com/romkatv/powerlevel10k-media/raw/master/MesloLGS%20NF%20Bold%20Italic.ttf /home/$USER_NAME/.fonts/
+# Reproducibility: immutable commit of romkatv/powerlevel10k-media (was the
+# moving `master` branch). Content is identical to master at the time of pinning.
+ARG P10K_MEDIA_REF=145eb9fbc2f42ee408dacd9b22d8e6e0e553f83d
 
+ADD --chown=${USER_NAME} https://gist.githubusercontent.com/ivan-kostko/2356a782a40be65b432a9fdbc67845cd/raw/59468eb3935bf1141437d96d3dfcecef277c4331/p10k.zsh /home/$USER_NAME/.p10k.zsh
+ADD --chown=${USER_NAME} https://github.com/romkatv/powerlevel10k-media/raw/${P10K_MEDIA_REF}/MesloLGS%20NF%20Regular.ttf /home/$USER_NAME/.fonts/
+ADD --chown=${USER_NAME} https://github.com/romkatv/powerlevel10k-media/raw/${P10K_MEDIA_REF}/MesloLGS%20NF%20Bold.ttf /home/$USER_NAME/.fonts/
+ADD --chown=${USER_NAME} https://github.com/romkatv/powerlevel10k-media/raw/${P10K_MEDIA_REF}/MesloLGS%20NF%20Italic.ttf /home/$USER_NAME/.fonts/
+ADD --chown=${USER_NAME} https://github.com/romkatv/powerlevel10k-media/raw/${P10K_MEDIA_REF}/MesloLGS%20NF%20Bold%20Italic.ttf /home/$USER_NAME/.fonts/
+
+# Accepted mutable inputs: CI resolves these to explicit revisions and passes
+# them in; when empty (local builds) upstream "latest"/`master` is used.
+ARG OMZ_REF=""
+ARG P10K_REF=""
 COPY --chown=${USER_NAME} --chmod=0755 setup.sh /tmp/setup.sh
 RUN /tmp/setup.sh $USER_NAME
 
+ARG CLAUDE_CODE_VERSION=""
+ARG CODEX_VERSION=""
 COPY --chown=${USER_NAME} --chmod=0755 install-ai-clis.sh /tmp/install-ai-clis.sh
 RUN /tmp/install-ai-clis.sh $USER_NAME
+
+# Record what was actually installed (documented in docs/product-contract.md).
+COPY --chown=${USER_NAME} --chmod=0755 write-build-info.sh /tmp/write-build-info.sh
+RUN /tmp/write-build-info.sh

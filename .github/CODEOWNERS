@@ -1,0 +1,14 @@
+# Changes to build, CI and dev-container definitions need review from a code
+# owner. Enforce with the "Require review from Code Owners" branch rule
+# (docs/github-settings.md).
+/.github/                  @ivan-kostko
+/dev-base/                 @ivan-kostko
+/.devcontainer/            @ivan-kostko
+
+# Image roles and the tooling that polices the paths above; weakening any of
+# it weakens the checks.
+/extras/                   @ivan-kostko
+/tests/                    @ivan-kostko
+/scripts/                  @ivan-kostko
+/docker-bake.hcl           @ivan-kostko
+/.pre-commit-config.yaml   @ivan-kostko

@@ -1,0 +1,15 @@
+# Test image for the Debian product image.
+#
+# Derived FROM the product under test. It adds ONLY the smoke-test scripts and
+# the command contract under /opt/dev-base-tests (root-owned); no packages, no
+# test framework. The user stays the product's non-root `vscode`, and the
+# environment the assertions run in is the unchanged inherited product.
+# Built with PRODUCT_IMAGE = the product built from this checkout (docker-bake.hcl
+# target "test") or a pushed product digest (target "test-published").
+ARG PRODUCT_IMAGE=product
+FROM ${PRODUCT_IMAGE}
+
+USER root
+COPY --chmod=0755 tests/product/smoke.sh /opt/dev-base-tests/smoke.sh
+COPY dev-base/contract/ /opt/dev-base-tests/contract/
+USER vscode

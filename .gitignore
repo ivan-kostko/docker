@@ -1,2 +1,9 @@
 # Shell history bind-mounted into the dev container
 .devcontainer/.zsh_history
+
+# Python bytecode from scripts/ and its self-tests
+__pycache__/
+*.pyc
+
+# Local output of scripts/scan-image.sh (SBOMs, vulnerability reports)
+reports/
