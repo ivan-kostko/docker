@@ -1,0 +1,28 @@
+# Extras image (alpine): the dev-base alpine product image plus this repository's
+# development tools. Used by the .devcontainer/alpine devcontainer and by CI for
+# repository checks (pre-commit, lint, SBOM/vulnerability scanning).
+#
+#   - Repo-only tooling lives here and nowhere else: pre-commit, ShellCheck,
+#     yamllint, Hadolint, actionlint, Syft, Grype, plus pre-warmed pre-commit
+#     hook environments, so checks run without installing anything at
+#     container start.
+#   - The product image is never modified; this image is never used to test it
+#     (see tests/product for the test image).
+#   - Not published (docs/images.md).
+#
+# BASE_IMAGE: devcontainers default to the published product image of this
+# variant. CI and `docker buildx bake` override it with the product built from
+# the same checkout.
+ARG BASE_IMAGE=ghcr.io/ivan-kostko/dev-base:alpine
+FROM ${BASE_IMAGE}
+
+USER root
+RUN apk add --no-cache pre-commit shellcheck yamllint
+
+COPY extras/tools.env extras/install-tools.sh /tmp/extras/
+RUN /tmp/extras/install-tools.sh && rm -rf /tmp/extras
+
+# Pre-install every pre-commit hook environment (the checks themselves).
+USER vscode
+COPY --chown=vscode .pre-commit-config.yaml /tmp/pre-commit-warmup/.pre-commit-config.yaml
+RUN cd /tmp/pre-commit-warmup && git init --quiet && pre-commit install-hooks && rm -rf /tmp/pre-commit-warmup

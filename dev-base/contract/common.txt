@@ -1,0 +1,16 @@
+# Product command contract shared by every dev-base variant.
+# One command line per entry; each must exit 0 when run by the non-root
+# `vscode` user in an interactive zsh (so PATH set in ~/.zshrc counts).
+# Documented in docs/product-contract.md; enforced by tests/product/smoke.sh.
+zsh --version
+git --version
+curl --version
+jq --version
+ssh -V
+gpg --version
+less --version
+unzip -v
+gcc --version
+make --version
+claude --version
+codex --version

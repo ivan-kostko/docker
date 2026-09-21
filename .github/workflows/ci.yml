@@ -1,20 +1,55 @@
 name: CI/CD
 
-# Builds the dev-base images (Debian + Alpine, amd64 + arm64).
-#   - pull requests:  lint + build only (nothing is pushed)
-#   - push to master: build and publish to GHCR
-#   - v* tags:        build and publish with version tags
-#   - weekly cron:    rebuild to pick up base-image / OS / CLI updates
-#   - manual:         workflow_dispatch (set "publish" to push)
+# Builds and releases the dev-base PRODUCT images (Debian + Alpine, amd64 + arm64).
 #
-# Everything here is free for public repositories: GitHub Actions minutes,
-# the GitHub Actions cache and GHCR storage/bandwidth for public packages.
+# Three image roles (docs/images.md), built by docker-bake.hcl:
+#   product  dev-base/Dockerfile.*       release artifact; nothing is ever installed into it for CI
+#   test     tests/product/Dockerfile.*  FROM product + smoke-test scripts only; the smoke tests run here
+#   extras   extras/Dockerfile.*         FROM product + repo dev tools (pre-commit, linters, Syft, Grype);
+#                                        used by the devcontainers and for repo checks; never published
+#
+#   policy   every event    pre-commit run --all-files + devcontainer policy, run in the extras image
+#   resolve  every event    resolve the accepted-mutable upstream inputs to explicit versions (recorded)
+#   verify   every event    build product, smoke-test it via the test image, SBOM + vulnerability scan
+#   publish  trusted only   validate again on the pushed digest, publish PRODUCT images, attest, tag
+#   drift    schedule/manual report upstream drift against the published images (never publishes)
+#   gate     every event    single required status check for branch protection
+#
+# Triggers
+#   - pull requests:  policy + resolve + verify only. No `paths:` filter, deliberately: a required
+#     check skipped by a path filter stays "pending" forever, and changes to dev-base/,
+#     .devcontainer/, extras/, tests/, scripts/, .github/, .pre-commit-config.yaml or any root
+#     config must never skip CI.
+#   - push to master: verify, then publish (rolling + dated + sha tags, same names as before)
+#   - v*.*.* tags:    verify, then publish with version tags
+#   - weekly cron:    verify (fresh, uncached build + scan) and a drift report. It does NOT publish:
+#     moving the rolling tags to newer upstream content is a deliberate release, i.e. a push to the
+#     default branch, a release tag, or a manual run with `publish: true`, each behind the gate below.
+#   - manual:         workflow_dispatch; `publish` is only honoured on the default branch or a
+#     release tag, and still needs the approval configured on the `production` environment.
+#
+# Trust model
+#   Code from pull requests (including same-repository ones) only ever runs in jobs with
+#   `contents: read`. The `publish` job is the ONLY job with packages / id-token / attestations
+#   write; it is skipped for pull requests and runs in the protected `production` environment.
+#   Branch, tag and environment protection are GitHub-side settings: docs/github-settings.md.
+#
+# Release gate: smoke test + SBOM + vulnerability scan (threshold below) + provenance and SBOM
+# attestations are mandatory before any tag moves.
+#
+# Vulnerability threshold (docs/ci-cd.md): CRITICAL with an available fix blocks (verify and
+# publish), unfixed findings and HIGH are reported as warnings. Tune with repository variables
+# VULN_FAIL_ON (none|critical|high) and VULN_IGNORE_UNFIXED (true|false); reviewed, expiring
+# exceptions: .github/vuln-exceptions.json.
+#
+# Everything here is free for public repositories: GitHub Actions minutes, the GitHub Actions
+# cache and GHCR storage/bandwidth for public packages.
+#
+# Third-party actions are pinned to full commit SHAs; the trailing comment is the release the SHA
+# belongs to. Dependabot (.github/dependabot.yml) proposes updates for both.
 
 on:
   pull_request:
-    paths:
-      - "dev-base/**"
-      - ".github/workflows/ci.yml"
   push:
     branches: [master]
     tags: ["v*.*.*"]
@@ -23,7 +58,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: "Push images to GHCR"
+        description: "Release: push product images to GHCR (default branch or v* tag only; needs `production` approval)"
         type: boolean
         default: false
 
@@ -37,67 +72,318 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: dev-base
+  # Smoke tests run on the runner's own platform (arm64 is built, scanned and
+  # published but its binaries are not executed in CI; docs/ci-cd.md).
+  NATIVE_PLATFORM: linux/amd64
+  # Release threshold, overridable via repository variables. Default: block on
+  # Critical that has a fix available; unfixed findings (distro "won't fix" /
+  # "not fixed") are reported but cannot be fixed by a rebuild, so they do not
+  # block. Reviewed, time-boxed exceptions live in .github/vuln-exceptions.json.
+  VULN_FAIL_ON: ${{ vars.VULN_FAIL_ON || 'critical' }}
+  VULN_IGNORE_UNFIXED: ${{ vars.VULN_IGNORE_UNFIXED || 'true' }}
+  VULN_EXCEPTIONS_FILE: .github/vuln-exceptions.json
 
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Hadolint (Dockerfile.debian)
-        uses: hadolint/hadolint-action@v3.1.0
-        with:
-          dockerfile: dev-base/Dockerfile.debian
-          # Only hard errors fail the build; unpinned-package style warnings don't.
-          failure-threshold: error
-
-      - name: Hadolint (Dockerfile.alpine)
-        uses: hadolint/hadolint-action@v3.1.0
-        with:
-          dockerfile: dev-base/Dockerfile.alpine
-          failure-threshold: error
-
-      - name: ShellCheck
-        run: shellcheck dev-base/*.sh
-
-  build:
-    needs: lint
-    runs-on: ubuntu-latest
+  resolve:
+    name: Resolve upstream versions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: read
-      packages: write
-      id-token: write     # build provenance
-      attestations: write
+    outputs:
+      claude_code_version: ${{ steps.resolve.outputs.claude_code_version }}
+      codex_tag: ${{ steps.resolve.outputs.codex_tag }}
+      codex_version: ${{ steps.resolve.outputs.codex_version }}
+      omz_revision: ${{ steps.resolve.outputs.omz_revision }}
+      p10k_revision: ${{ steps.resolve.outputs.p10k_revision }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Claude Code, Codex, powerlevel10k and oh-my-zsh are accepted-mutable
+      # inputs (docs/reproducibility.md). Resolving "latest" once per run means
+      # every job builds exactly the same versions and they can be recorded.
+      - name: Resolve latest upstream versions
+        id: resolve
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/resolve-upstream-versions.sh | tee -a "$GITHUB_OUTPUT"
+
+      - name: Record resolved versions
+        env:
+          CLAUDE: ${{ steps.resolve.outputs.claude_code_version }}
+          CODEX_TAG: ${{ steps.resolve.outputs.codex_tag }}
+          CODEX: ${{ steps.resolve.outputs.codex_version }}
+          OMZ: ${{ steps.resolve.outputs.omz_revision }}
+          P10K: ${{ steps.resolve.outputs.p10k_revision }}
+        run: |
+          mkdir -p reports
+          jq -n \
+            --arg claude "$CLAUDE" --arg codex_tag "$CODEX_TAG" --arg codex "$CODEX" \
+            --arg omz "$OMZ" --arg p10k "$P10K" \
+            --arg sha "$GITHUB_SHA" --arg run "$GITHUB_RUN_ID" \
+            '{git_sha: $sha, run_id: $run, claude_code: $claude, codex_tag: $codex_tag, codex: $codex,
+              oh_my_zsh_revision: $omz, powerlevel10k_revision: $p10k}' \
+            | tee reports/upstream-versions.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: upstream-versions
+          path: reports/upstream-versions.json
+          retention-days: 90
+
+  policy:
+    name: Policy and quality
+    needs: [resolve]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      EXTRAS_TAG: dev-base-extras:debian
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Extras image (Debian) = product built from this checkout + repo tools.
+      # It has every pre-commit hook environment pre-installed.
+      - name: Build extras image
+        uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
+        env:
+          VARIANT: debian
+          CLAUDE_CODE_VERSION: ${{ needs.resolve.outputs.claude_code_version }}
+          CODEX_VERSION: ${{ needs.resolve.outputs.codex_tag }}
+          OMZ_REF: ${{ needs.resolve.outputs.omz_revision }}
+          P10K_REF: ${{ needs.resolve.outputs.p10k_revision }}
+        with:
+          # Local workspace (this checkout) is the source of the Bake definition
+          # and every build context, not the remote Git context.
+          source: .
+          files: docker-bake.hcl
+          targets: extras
+          load: true
+          set: |
+            product.cache-from=type=gha,scope=debian
+            extras.cache-from=type=gha,scope=extras-debian
+
+      # Same command a developer runs locally in the dev container; includes
+      # actionlint, yamllint, ShellCheck, Hadolint, detect-private-key /
+      # detect-secrets, whitespace fixers, workflow + Dependabot schema checks
+      # and the devcontainer trust-boundary policy.
+      - name: pre-commit run --all-files
+        run: |
+          scripts/extras-run.sh "$EXTRAS_TAG" -- \
+            pre-commit run --all-files --show-diff-on-failure --color=always
+
+      - name: Script self-tests
+        run: |
+          scripts/extras-run.sh "$EXTRAS_TAG" -- bash -c \
+            'python3 -m unittest discover -s scripts/tests -v && scripts/tests/test-vuln-threshold.sh && scripts/tests/test-scan-image.sh && scripts/tests/test-report-drift.sh'
+
+  verify:
+    name: Verify (${{ matrix.variant }})
+    needs: [resolve]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    # Runs pull-request code: read-only token, no secrets, no registry login.
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         variant: [debian, alpine]
     env:
-      PUSH: >-
-        ${{ github.event_name != 'pull_request'
-            && (github.event_name != 'workflow_dispatch' || inputs.publish) }}
+      VULN_VARIANT: ${{ matrix.variant }}
+      PRODUCT_TAG: dev-base-product:${{ matrix.variant }}
+      TEST_TAG: dev-base-test:${{ matrix.variant }}
+      EXTRAS_TAG: dev-base-extras:${{ matrix.variant }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Product for both platforms (arm64 emulated with QEMU). Nothing is pushed
+      # or loaded; the layer cache feeds the native build below. Scheduled runs
+      # ignore the cache so OS package updates show up in the scan.
+      - name: Build product (linux/amd64 + linux/arm64, not pushed)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: dev-base
+          file: dev-base/Dockerfile.${{ matrix.variant }}
+          platforms: linux/amd64,linux/arm64
+          push: false
+          build-args: |
+            CLAUDE_CODE_VERSION=${{ needs.resolve.outputs.claude_code_version }}
+            CODEX_VERSION=${{ needs.resolve.outputs.codex_tag }}
+            OMZ_REF=${{ needs.resolve.outputs.omz_revision }}
+            P10K_REF=${{ needs.resolve.outputs.p10k_revision }}
+          no-cache: ${{ github.event_name == 'schedule' }}
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,scope=${{ matrix.variant }},mode=max
+
+      # Native platform, loaded into the runner's Docker (not pushed):
+      #   product -> the image under test, untouched
+      #   test    -> FROM product + smoke-test scripts only
+      #   extras  -> FROM product + repo tools (toolbox for the scan below)
+      - name: Build product, test and extras images (${{ env.NATIVE_PLATFORM }}, loaded)
+        uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
+        env:
+          VARIANT: ${{ matrix.variant }}
+          PLATFORMS: ${{ env.NATIVE_PLATFORM }}
+          CLAUDE_CODE_VERSION: ${{ needs.resolve.outputs.claude_code_version }}
+          CODEX_VERSION: ${{ needs.resolve.outputs.codex_tag }}
+          OMZ_REF: ${{ needs.resolve.outputs.omz_revision }}
+          P10K_REF: ${{ needs.resolve.outputs.p10k_revision }}
+        with:
+          # Local workspace (this checkout) is the source of the Bake definition
+          # and every build context, not the remote Git context.
+          source: .
+          files: docker-bake.hcl
+          targets: product,test,extras
+          load: true
+          set: |
+            product.cache-from=type=gha,scope=${{ matrix.variant }}
+            extras.cache-from=type=gha,scope=extras-${{ matrix.variant }}
+            extras.cache-to=type=gha,scope=extras-${{ matrix.variant }},mode=max
+
+      # Assertions run in the TEST image (product + tests), as `vscode`.
+      - name: Product smoke test (${{ env.NATIVE_PLATFORM }})
+        run: scripts/run-product-smoke.sh "$TEST_TAG" "${{ matrix.variant }}" "$NATIVE_PLATFORM"
+
+      - name: Extract build info
+        run: |
+          mkdir -p reports
+          docker run --rm --user vscode "$TEST_TAG" cat /usr/local/share/dev-base/build-info.json \
+            | tee "reports/${{ matrix.variant }}-build-info.json"
+
+      # linux/arm64 product as a Docker archive, for static scanning only. It is
+      # built from the layers cached above (no push, no load, no registry login)
+      # and never executed: smoke tests stay native-only.
+      - name: Export product (linux/arm64) for scanning
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: dev-base
+          file: dev-base/Dockerfile.${{ matrix.variant }}
+          platforms: linux/arm64
+          build-args: |
+            CLAUDE_CODE_VERSION=${{ needs.resolve.outputs.claude_code_version }}
+            CODEX_VERSION=${{ needs.resolve.outputs.codex_tag }}
+            OMZ_REF=${{ needs.resolve.outputs.omz_revision }}
+            P10K_REF=${{ needs.resolve.outputs.p10k_revision }}
+          tags: dev-base-product:${{ matrix.variant }}-arm64
+          outputs: type=docker,dest=${{ runner.temp }}/product-arm64.tar
+          cache-from: type=gha,scope=${{ matrix.variant }}
+
+      # Both platforms are SBOM-generated and vulnerability-scanned BEFORE merge,
+      # with the same threshold: a Critical in either fails this job (and so the
+      # `CI gate`). Scanners live in the extras image, not in the product. Each
+      # product is handed over as an archive, so nothing needs the Docker socket
+      # and no target binary is executed.
+      - name: SBOM and vulnerability scan (linux/amd64)
+        run: |
+          docker save "$PRODUCT_TAG" -o "${RUNNER_TEMP}/product-amd64.tar"
+          scripts/extras-run.sh "$EXTRAS_TAG" \
+            -v "${RUNNER_TEMP}/product-amd64.tar:/tmp/product.tar:ro" \
+            -v "${RUNNER_TEMP}/grype-db:/root/.cache/grype" \
+            -- scripts/scan-image.sh docker-archive:/tmp/product.tar \
+              "reports/${{ matrix.variant }}-amd64" "" "${{ matrix.variant }} linux/amd64"
+
+      # if: so an amd64 finding does not hide the arm64 report (the job still fails).
+      - name: SBOM and vulnerability scan (linux/arm64)
+        if: ${{ !cancelled() }}
+        run: |
+          scripts/extras-run.sh "$EXTRAS_TAG" \
+            -v "${RUNNER_TEMP}/product-arm64.tar:/tmp/product.tar:ro" \
+            -v "${RUNNER_TEMP}/grype-db:/root/.cache/grype" \
+            -- scripts/scan-image.sh docker-archive:/tmp/product.tar \
+              "reports/${{ matrix.variant }}-arm64" "" "${{ matrix.variant }} linux/arm64"
+
+      # SARIF is uploaded to code scanning by the publish job only, because
+      # that needs `security-events: write`, which this job must not have.
+      - name: Upload reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verify-${{ matrix.variant }}-reports
+          path: reports/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  publish:
+    name: Publish (${{ matrix.variant }})
+    needs: [policy, resolve, verify]
+    # Trusted events only. Never pull_request, never schedule. Manual runs
+    # additionally need `publish: true` and a default-branch / release-tag ref.
+    if: >-
+      github.event_name != 'pull_request' && (
+        (github.event_name == 'push'
+          && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+              || startsWith(github.ref, 'refs/tags/v')))
+        || (github.event_name == 'workflow_dispatch' && inputs.publish
+          && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+              || startsWith(github.ref, 'refs/tags/v')))
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      VULN_VARIANT: ${{ matrix.variant }}
+      TEST_TAG: dev-base-test:${{ matrix.variant }}
+      EXTRAS_TAG: dev-base-extras:${{ matrix.variant }}
+    # Required reviewers / deployment-branch rules on this environment are the
+    # publishing approval gate (docs/github-settings.md).
+    environment:
+      name: production
+      url: https://github.com/${{ github.repository }}/pkgs/container/dev-base
+    # The only job allowed to write packages or mint OIDC / attestation tokens.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write         # build provenance / SBOM attestations
+      attestations: write
+      security-events: write  # SARIF upload to code scanning
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [debian, alpine]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Compute lowercase image name
         id: image
-        run: echo "name=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+        run: |
+          name="${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "IMAGE=${name}" >> "$GITHUB_ENV"
 
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Read pinned base image
+        id: base
+        run: scripts/base-image-info.sh "dev-base/Dockerfile.${{ matrix.variant }}" | tee -a "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
-        if: env.PUSH == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Also adds org.opencontainers.image.{source,revision,version,created,url,licenses}.
       - name: Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ steps.image.outputs.name }}
           flavor: latest=false
@@ -116,27 +402,277 @@ jobs:
           labels: |
             org.opencontainers.image.title=dev-base (${{ matrix.variant }})
             org.opencontainers.image.description=Dev container base image (${{ matrix.variant }})
+            org.opencontainers.image.base.name=${{ steps.base.outputs.name }}
+            org.opencontainers.image.base.digest=${{ steps.base.outputs.digest }}
+            io.github.ivan-kostko.dev-base.variant=${{ matrix.variant }}
+            io.github.ivan-kostko.dev-base.claude-code-version=${{ needs.resolve.outputs.claude_code_version }}
+            io.github.ivan-kostko.dev-base.codex-version=${{ needs.resolve.outputs.codex_version }}
+            io.github.ivan-kostko.dev-base.codex-release-tag=${{ needs.resolve.outputs.codex_tag }}
+            io.github.ivan-kostko.dev-base.oh-my-zsh-revision=${{ needs.resolve.outputs.omz_revision }}
+            io.github.ivan-kostko.dev-base.powerlevel10k-revision=${{ needs.resolve.outputs.p10k_revision }}
 
-      - name: Build${{ env.PUSH == 'true' && ' and push' || '' }}
+      # Push the multi-platform PRODUCT image by digest only, WITHOUT tags.
+      # Nothing is reachable by name until it has been smoke-tested, scanned,
+      # attested and has passed the vulnerability threshold; tags come last.
+      # verify already built these layers (same run, same cache scope).
+      - name: Build and push product (untagged, by digest)
         id: build
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: dev-base
           file: dev-base/Dockerfile.${{ matrix.variant }}
           platforms: linux/amd64,linux/arm64
-          push: ${{ env.PUSH == 'true' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            CLAUDE_CODE_VERSION=${{ needs.resolve.outputs.claude_code_version }}
+            CODEX_VERSION=${{ needs.resolve.outputs.codex_tag }}
+            OMZ_REF=${{ needs.resolve.outputs.omz_revision }}
+            P10K_REF=${{ needs.resolve.outputs.p10k_revision }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Base image / package updates are wanted on scheduled rebuilds.
-          pull: true
-          no-cache: ${{ github.event_name == 'schedule' }}
+          outputs: type=image,name=${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.variant }}
-          cache-to: type=gha,scope=${{ matrix.variant }},mode=max
 
-      - name: Attest build provenance
-        if: env.PUSH == 'true'
-        uses: actions/attest-build-provenance@v2
+      - name: Resolve per-platform digests
+        id: digests
+        env:
+          INDEX_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          scripts/image-platform-digests.sh "${IMAGE}@${INDEX_DIGEST}" | tee platforms.txt
+          amd64="$(awk '$1 == "linux/amd64" { print $2 }' platforms.txt)"
+          arm64="$(awk '$1 == "linux/arm64" { print $2 }' platforms.txt)"
+          if [ -z "$amd64" ] || [ -z "$arm64" ]; then
+            echo "::error::expected linux/amd64 and linux/arm64 manifests in ${IMAGE}@${INDEX_DIGEST}"
+            exit 1
+          fi
+          {
+            echo "index=${INDEX_DIGEST}"
+            echo "amd64=${amd64}"
+            echo "arm64=${arm64}"
+          } >> "$GITHUB_OUTPUT"
+
+      # Validation is repeated on what was actually pushed: the test image is
+      # built FROM the pushed amd64 product digest; extras is only the toolbox.
+      - name: Build test image on the pushed digest, and extras image
+        uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
+        env:
+          VARIANT: ${{ matrix.variant }}
+          PLATFORMS: ${{ env.NATIVE_PLATFORM }}
+          PRODUCT_REF: ${{ steps.image.outputs.name }}@${{ steps.digests.outputs.amd64 }}
+          CLAUDE_CODE_VERSION: ${{ needs.resolve.outputs.claude_code_version }}
+          CODEX_VERSION: ${{ needs.resolve.outputs.codex_tag }}
+          OMZ_REF: ${{ needs.resolve.outputs.omz_revision }}
+          P10K_REF: ${{ needs.resolve.outputs.p10k_revision }}
+        with:
+          # Local workspace (this checkout) is the source of the Bake definition
+          # and every build context, not the remote Git context.
+          source: .
+          files: docker-bake.hcl
+          targets: test-published,extras
+          load: true
+          set: |
+            product.cache-from=type=gha,scope=${{ matrix.variant }}
+            extras.cache-from=type=gha,scope=extras-${{ matrix.variant }}
+
+      - name: Product smoke test on pushed image (${{ env.NATIVE_PLATFORM }})
+        env:
+          EXPECT_REVISION: ${{ github.sha }}
+          EXPECT_LABELS: "1"
+        run: scripts/run-product-smoke.sh "$TEST_TAG" "${{ matrix.variant }}" "$NATIVE_PLATFORM"
+
+      # Retained CI build metadata: what was resolved, what is installed, and
+      # which digests/tags this run produced.
+      - name: Record build metadata
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          INDEX: ${{ steps.digests.outputs.index }}
+          AMD64: ${{ steps.digests.outputs.amd64 }}
+          ARM64: ${{ steps.digests.outputs.arm64 }}
+          BASE_REF: ${{ steps.base.outputs.ref }}
+        run: |
+          mkdir -p reports
+          docker run --rm --user vscode "$TEST_TAG" cat /usr/local/share/dev-base/build-info.json > build-info.json
+          jq -n \
+            --slurpfile installed build-info.json \
+            --arg image "$IMAGE" --arg variant "${{ matrix.variant }}" \
+            --arg index "$INDEX" --arg amd64 "$AMD64" --arg arm64 "$ARM64" \
+            --arg base "$BASE_REF" --arg sha "$GITHUB_SHA" --arg run "$GITHUB_RUN_ID" \
+            --arg tags "$TAGS" \
+            '{image: $image, variant: $variant, git_sha: $sha, run_id: $run,
+              digests: {index: $index, "linux/amd64": $amd64, "linux/arm64": $arm64},
+              tags: ($tags | split("\n") | map(select(. != ""))),
+              base_image: $base, build_info: $installed[0]}' \
+            | tee "reports/${{ matrix.variant }}-build-metadata.json"
+
+      # SBOM + scan of the exact pushed digests, both platforms (no emulation
+      # needed: nothing is executed). Registry credentials come from the
+      # docker login above.
+      - name: SBOM and vulnerability scan (linux/amd64)
+        env:
+          DIGEST: ${{ steps.digests.outputs.amd64 }}
+        run: |
+          scripts/extras-run.sh "$EXTRAS_TAG" \
+            -v "${HOME}/.docker/config.json:/root/.docker/config.json:ro" \
+            -v "${RUNNER_TEMP}/grype-db:/root/.cache/grype" \
+            -- scripts/scan-image.sh "registry:${IMAGE}@${DIGEST}" \
+              "reports/${{ matrix.variant }}-amd64" linux/amd64 "${{ matrix.variant }} linux/amd64"
+
+      - name: SBOM and vulnerability scan (linux/arm64)
+        if: ${{ !cancelled() }}
+        env:
+          DIGEST: ${{ steps.digests.outputs.arm64 }}
+        run: |
+          scripts/extras-run.sh "$EXTRAS_TAG" \
+            -v "${HOME}/.docker/config.json:/root/.docker/config.json:ro" \
+            -v "${RUNNER_TEMP}/grype-db:/root/.cache/grype" \
+            -- scripts/scan-image.sh "registry:${IMAGE}@${DIGEST}" \
+              "reports/${{ matrix.variant }}-arm64" linux/arm64 "${{ matrix.variant }} linux/arm64"
+
+      - name: Upload reports and build metadata
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: publish-${{ matrix.variant }}-reports
+          path: reports/
+          if-no-files-found: ignore
+          retention-days: 90
+
+      # Code scanning may be unavailable (e.g. private repo without GHAS); the
+      # artifact above is the guaranteed record, so this must not fail the run.
+      - name: Upload SARIF (linux/amd64)
+        if: ${{ !cancelled() && hashFiles(format('reports/{0}-amd64/grype.sarif', matrix.variant)) != '' }}
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        with:
+          sarif_file: reports/${{ matrix.variant }}-amd64/grype.sarif
+          category: dev-base-${{ matrix.variant }}-amd64
+
+      - name: Upload SARIF (linux/arm64)
+        if: ${{ !cancelled() && hashFiles(format('reports/{0}-arm64/grype.sarif', matrix.variant)) != '' }}
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        with:
+          sarif_file: reports/${{ matrix.variant }}-arm64/grype.sarif
+          category: dev-base-${{ matrix.variant }}-arm64
+
+      # Mandatory before release: attestations are attached to digests in the
+      # registry before any tag exists. Provenance covers the multi-platform
+      # index; each platform image gets its own SBOM attestation (the SBOM
+      # describes that image's contents).
+      # create-storage-record is off: it would need `artifact-metadata: write`,
+      # and this job is deliberately limited to packages / id-token / attestations.
+      - name: Attest build provenance (index)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ steps.image.outputs.name }}
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-digest: ${{ steps.digests.outputs.index }}
           push-to-registry: true
+          create-storage-record: false
+
+      # actions/attest replaces the deprecated actions/attest-sbom wrapper.
+      - name: Attest SBOM (linux/amd64)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.digests.outputs.amd64 }}
+          sbom-path: reports/${{ matrix.variant }}-amd64/sbom.spdx.json
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Attest SBOM (linux/arm64)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.digests.outputs.arm64 }}
+          sbom-path: reports/${{ matrix.variant }}-arm64/sbom.spdx.json
+          push-to-registry: true
+          create-storage-record: false
+
+      # Last step: only now do the tags point at the verified digest.
+      # Only the product is published. Extras images are deliberately not.
+      - name: Apply tags
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          INDEX_DIGEST: ${{ steps.digests.outputs.index }}
+        run: |
+          args=()
+          while IFS= read -r tag; do
+            [ -z "$tag" ] || args+=(-t "$tag")
+          done <<<"$TAGS"
+          [ "${#args[@]}" -gt 0 ] || { echo "::error::no tags to apply"; exit 1; }
+          docker buildx imagetools create "${args[@]}" "${IMAGE}@${INDEX_DIGEST}"
+          {
+            echo "### Published ${{ matrix.variant }}"
+            echo
+            echo "Digest: \`${INDEX_DIGEST}\`"
+            echo
+            while IFS= read -r tag; do
+              [ -z "$tag" ] || printf -- '- %s\n' "$tag"
+            done <<<"$TAGS"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  drift:
+    name: Upstream drift (${{ matrix.variant }})
+    # Reporting only. Compares the published images with what a rebuild from
+    # upstream-latest would contain; a release is a separate, gated decision.
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    needs: [resolve]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [debian, alpine]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR (read-only)
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Base image digest drift
+        run: |
+          if scripts/update-base-images.sh --check; then
+            echo "Base images are current."
+          else
+            echo "::warning title=Base image drift::a pinned base image has a newer digest; run scripts/update-base-images.sh --write and open a PR"
+          fi
+
+      - name: Published images vs upstream latest
+        env:
+          CLAUDE_CODE_VERSION: ${{ needs.resolve.outputs.claude_code_version }}
+          CODEX_VERSION: ${{ needs.resolve.outputs.codex_version }}
+          OMZ_REVISION: ${{ needs.resolve.outputs.omz_revision }}
+          P10K_REVISION: ${{ needs.resolve.outputs.p10k_revision }}
+        run: |
+          IMAGE="${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}"
+          export IMAGE
+          BASE_DIGEST="$(scripts/base-image-info.sh "dev-base/Dockerfile.${{ matrix.variant }}" | sed -n 's/^digest=//p')"
+          export BASE_DIGEST
+          scripts/report-drift.sh "${{ matrix.variant }}"
+
+  gate:
+    name: CI gate
+    # The single status check to require in branch protection. It is
+    # independent of matrix names and of whether publish ran.
+    if: ${{ always() }}
+    needs: [resolve, policy, verify]
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Require resolve, policy and verify to have succeeded
+        env:
+          RESOLVE: ${{ needs.resolve.result }}
+          POLICY: ${{ needs.policy.result }}
+          VERIFY: ${{ needs.verify.result }}
+        run: |
+          echo "resolve=${RESOLVE} policy=${POLICY} verify=${VERIFY}"
+          [ "$RESOLVE" = success ] && [ "$POLICY" = success ] && [ "$VERIFY" = success ]

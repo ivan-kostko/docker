@@ -1,0 +1,7 @@
+# Alpine-only contract.
+bash --version
+docker --version
+docker buildx version
+docker compose version
+rg --version
+sudo -n true

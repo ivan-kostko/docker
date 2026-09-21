@@ -1,7 +1,8 @@
 ---
 # Install once per clone:  pre-commit install
 # Run on everything:       pre-commit run --all-files
-# Mirrors the lint job in .github/workflows/ci.yml (hadolint + shellcheck).
+# CI runs exactly `pre-commit run --all-files` (the "policy" job in
+# .github/workflows/ci.yml), so local installation is optional, not a control.
 minimum_pre_commit_version: "3.0.0"
 
 repos:
@@ -34,6 +35,9 @@ repos:
     rev: v2.15.1
     hooks:
       - id: hadolint
+        # Dockerfile.dockerignore is BuildKit's per-Dockerfile ignore file,
+        # not a Dockerfile, but its name matches hadolint's file type.
+        exclude: \.dockerignore$
         # Same threshold as CI: only hard errors fail.
         args: [--failure-threshold, error]
 
@@ -47,3 +51,28 @@ repos:
     rev: v1.7.12.24
     hooks:
       - id: actionlint
+
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0.38.0
+    hooks:
+      # Schema validation, complementary to actionlint.
+      - id: check-github-workflows
+      - id: check-dependabot
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        # Findings that are reviewed false positives (e.g. checksums) are
+        # marked inline with `pragma: allowlist secret`.
+
+  - repo: local
+    hooks:
+      - id: devcontainer-policy
+        name: devcontainer trust-boundary policy
+        description: Fails on unreviewed mounts / risky runtime options in devcontainer.json.
+        entry: scripts/check-devcontainer-policy.py
+        language: python
+        pass_filenames: false
+        # Always run: the allowlist and the configs must be checked together.
+        always_run: true

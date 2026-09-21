@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "files": [".devcontainer/alpine/devcontainer.json", ".devcontainer/debian/devcontainer.json"],
+      "rule": "mount",
+      "value": "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached",
+      "reason": "Local-development trust boundary: exposes the developer's whole ~/.ssh (private keys) to everything running in the container, so git can push over SSH. Never use this container for untrusted code."
+    },
+    {
+      "files": [".devcontainer/alpine/devcontainer.json", ".devcontainer/debian/devcontainer.json"],
+      "rule": "mount",
+      "value": "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gnupg/,target=/home/vscode/.gnupg/,type=bind",
+      "reason": "Local-development trust boundary: exposes the developer's whole ~/.gnupg (secret keyring) read-write to the container so commits/tags can be GPG-signed (repo requires signing)."
+    },
+    {
+      "files": [".devcontainer/alpine/devcontainer.json", ".devcontainer/debian/devcontainer.json"],
+      "rule": "mount",
+      "value": "source=${localWorkspaceFolder}/.devcontainer/.zsh_history,target=/home/vscode/.zsh_history,type=bind,consistency=cached",
+      "reason": "Persists shell history in the workspace (git-ignored). Low risk: single file inside the workspace, but history can contain pasted secrets."
+    },
+    {
+      "files": [".devcontainer/alpine/devcontainer.json", ".devcontainer/debian/devcontainer.json"],
+      "rule": "mount",
+      "value": "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude,target=/home/vscode/.claude,type=bind,consistency=cached",
+      "reason": "Local-development trust boundary: shares Claude Code config, history and credentials from the host with the container so login persists across rebuilds."
+    },
+    {
+      "files": [".devcontainer/alpine/devcontainer.json", ".devcontainer/debian/devcontainer.json"],
+      "rule": "mount",
+      "value": "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude.json,target=/home/vscode/.claude.json,type=bind,consistency=cached",
+      "reason": "Local-development trust boundary: shares the Claude Code account/state file (may contain OAuth details) from the host with the container."
+    },
+    {
+      "files": [".devcontainer/alpine/devcontainer.json", ".devcontainer/debian/devcontainer.json"],
+      "rule": "run-arg",
+      "value": "--security-opt seccomp=unconfined",
+      "reason": "Local-development trust boundary: disables the default seccomp filter, widening the container-escape surface. Kept for tooling that needs blocked syscalls; revisit and drop if no longer required."
+    },
+    {
+      "files": [".devcontainer/alpine/devcontainer.json", ".devcontainer/debian/devcontainer.json"],
+      "rule": "host-command",
+      "value": "mkdir -p \"$HOME/.ssh\" \"$HOME/.claude\" && touch \"$HOME/.claude.json\"",
+      "reason": "Runs on the HOST before the container starts (outside the sandbox). Only creates the directories/files that the bind mounts above need, so Docker does not create them as root."
+    },
+    {
+      "files": [".devcontainer/debian/devcontainer.json"],
+      "rule": "feature",
+      "value": "ghcr.io/devcontainers/features/docker-outside-of-docker:1",
+      "reason": "Local-development trust boundary: gives the container a docker CLI wired to the HOST Docker daemon. Anything in the container can start privileged containers on the host, i.e. it is equivalent to root on the host."
+    }
+  ]
+}

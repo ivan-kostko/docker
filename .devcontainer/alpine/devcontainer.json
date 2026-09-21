@@ -1,15 +1,15 @@
 {
   "name": "Docker Alpine Dev",
+  // Extras image (extras/Dockerfile.alpine) = published dev-base product image +
+  // this repo's dev tools (pre-commit, linters, scanners, pre-warmed hooks).
+  // Never the raw product image. To try local dev-base changes, tag a local
+  // product build as ghcr.io/ivan-kostko/dev-base:alpine first (docs/images.md).
   "build": {
-    "dockerfile": "../../dev-base/Dockerfile.alpine",
-    // "args": {
-    //   // Matches the container user's UID to your host UID so bind-mounted
-    //   // files (SSH keys, GPG, workspace) aren't owned by a mismatched user.
-    //   // On macOS/Linux this resolves from your shell; on Windows it's
-    //   // usually 1000 anyway since WSL2 users typically are.
-    //   "USER_UID": "${localEnv:UID}"
-    // },
-    "context": "../../dev-base"
+    "dockerfile": "../../extras/Dockerfile.alpine",
+    "context": "../..",
+    "args": {
+      "BASE_IMAGE": "ghcr.io/ivan-kostko/dev-base:alpine"
+    }
   },
   "remoteUser": "vscode",
   "updateRemoteUserUID": true,   // this is the default, but explicit is clearer here
@@ -21,6 +21,7 @@
   // packages-alpine.txt); the mount + postStartCommand below replicate
   // what the feature would otherwise do at container start.
   "containerEnv": {},
+  "initializeCommand": "mkdir -p \"$HOME/.ssh\" \"$HOME/.claude\" && touch \"$HOME/.claude.json\"",
   "mounts": [
     // SSH keys
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached",

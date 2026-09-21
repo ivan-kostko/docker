@@ -1,0 +1,4 @@
+# Build context is the repository root; only the test files are needed.
+*
+!tests/product/smoke.sh
+!dev-base/contract/
