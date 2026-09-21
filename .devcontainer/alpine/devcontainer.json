@@ -2,8 +2,9 @@
   "name": "Docker Alpine Dev",
   // Extras image (extras/Dockerfile.alpine) = published dev-base product image +
   // this repo's dev tools (pre-commit, linters, scanners, pre-warmed hooks).
-  // Never the raw product image. To try local dev-base changes, tag a local
-  // product build as ghcr.io/ivan-kostko/dev-base:alpine first (docs/images.md).
+  // Never the raw product image: it has no pre-commit, so `pre-commit install`
+  // below would fail. To try local dev-base changes, tag a local product build
+  // as ghcr.io/ivan-kostko/dev-base:alpine first (docs/images.md).
   "build": {
     "dockerfile": "../../extras/Dockerfile.alpine",
     "context": "../..",
@@ -21,7 +22,7 @@
   // packages-alpine.txt); the mount + postStartCommand below replicate
   // what the feature would otherwise do at container start.
   "containerEnv": {},
-  "initializeCommand": "mkdir -p \"$HOME/.ssh\" \"$HOME/.claude\" && touch \"$HOME/.claude.json\"",
+  "initializeCommand": "mkdir -p \"$HOME/.ssh\" \"$HOME/.claude\" \"$HOME/.codex\" && touch \"$HOME/.claude.json\"",
   "mounts": [
     // SSH keys
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached",
@@ -36,25 +37,30 @@
     // ZSH history
     "source=${localWorkspaceFolder}/.devcontainer/.zsh_history,target=/home/vscode/.zsh_history,type=bind,consistency=cached",
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude,target=/home/vscode/.claude,type=bind,consistency=cached",
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude.json,target=/home/vscode/.claude.json,type=bind,consistency=cached"
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude.json,target=/home/vscode/.claude.json,type=bind,consistency=cached",
+    // Codex CLI credentials + config (~/.codex): same host directory as on the
+    // host itself, so it syncs across devices (via whatever syncs your home
+    // directory) and behaves the same in every dev container, like ~/.claude.
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.codex,target=/home/vscode/.codex,type=bind,consistency=cached"
   ],
   "postStartCommand": "pre-commit install",
   "customizations": {
     "vscode": {
       "extensions": [
-          "streetsidesoftware.code-spell-checker",
-          "shardulm94.trailing-spaces",
-          "ms-vscode-remote.remote-containers",
-          "ms-azuretools.vscode-docker",
-          "adamhartford.vscode-base64",
-          "redhat.vscode-yaml",
-          "ms-vscode.makefile-tools",
-          "formulahendry.docker-extension-pack",
-          "henriiik.docker-linter",
-          "yzane.markdown-pdf",
-          "breaking-point.vsc-postman",
-          "Anthropic.claude-code",
-          "dbaeumer.vscode-eslint"
+        "streetsidesoftware.code-spell-checker",
+        "shardulm94.trailing-spaces",
+        "ms-vscode-remote.remote-containers",
+        "ms-azuretools.vscode-docker",
+        "adamhartford.vscode-base64",
+        "redhat.vscode-yaml",
+        "ms-vscode.makefile-tools",
+        "formulahendry.docker-extension-pack",
+        "henriiik.docker-linter",
+        "yzane.markdown-pdf",
+        "breaking-point.vsc-postman",
+        "Anthropic.claude-code",
+        "openai.chatgpt",
+        "dbaeumer.vscode-eslint"
       ],
       "settings": {
         "terminal.integrated.defaultProfile.linux": "zsh",

@@ -34,8 +34,9 @@ running inside can use these.
 | mount `~/.gnupg` | alpine, debian | GPG secret keyring, read-write (commit/tag signing) |
 | mount `.devcontainer/.zsh_history` | alpine, debian | shell history (may contain pasted secrets); git-ignored |
 | mount `~/.claude`, `~/.claude.json` | alpine, debian | Claude Code config and login state |
+| mount `~/.codex` | alpine, debian | Codex CLI config and login tokens, same host directory as on the host (syncs across devices like `~/.claude`) |
 | `--security-opt seccomp=unconfined` | alpine, debian | no syscall filtering; larger container-escape surface. Candidate for removal |
-| `initializeCommand` (`mkdir -p ~/.ssh ~/.claude && touch ~/.claude.json`) | alpine, debian | runs on the host; only creates paths the mounts need |
+| `initializeCommand` (`mkdir -p ~/.ssh ~/.claude ~/.codex && touch ~/.claude.json`) | alpine, debian | runs on the host; only creates paths the mounts need |
 | feature `docker-outside-of-docker:1` | debian | host Docker daemon access, equivalent to root on the host |
 
 The Alpine image installs `docker-cli`/`buildx` but has no feature and no socket mount, so it cannot reach a daemon
