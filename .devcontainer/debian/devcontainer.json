@@ -24,7 +24,7 @@
     "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
   },
   "containerEnv": {},
-  "initializeCommand": "mkdir -p \"$HOME/.ssh\" \"$HOME/.claude\" && touch \"$HOME/.claude.json\"",
+  "initializeCommand": "mkdir -p \"$HOME/.ssh\" \"$HOME/.claude\" \"$HOME/.codex\" && touch \"$HOME/.claude.json\"",
   "mounts": [
     // SSH keys
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached",
@@ -39,7 +39,11 @@
     // ZSH history
     "source=${localWorkspaceFolder}/.devcontainer/.zsh_history,target=/home/vscode/.zsh_history,type=bind,consistency=cached",
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude,target=/home/vscode/.claude,type=bind,consistency=cached",
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude.json,target=/home/vscode/.claude.json,type=bind,consistency=cached"
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude.json,target=/home/vscode/.claude.json,type=bind,consistency=cached",
+    // Codex CLI credentials + config (~/.codex): same host directory as on the
+    // host itself, so it syncs across devices (via whatever syncs your home
+    // directory) and behaves the same in every dev container, like ~/.claude.
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.codex,target=/home/vscode/.codex,type=bind,consistency=cached"
   ],
   "postStartCommand": "pre-commit install",
     "customizations": {
@@ -57,6 +61,7 @@
           "yzane.markdown-pdf",
           "breaking-point.vsc-postman",
           "Anthropic.claude-code",
+          "openai.chatgpt",
           "dbaeumer.vscode-eslint"
         ],
         "settings": {

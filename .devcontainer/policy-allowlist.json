@@ -33,6 +33,12 @@
     },
     {
       "files": [".devcontainer/alpine/devcontainer.json", ".devcontainer/debian/devcontainer.json"],
+      "rule": "mount",
+      "value": "source=${localEnv:HOME}${localEnv:USERPROFILE}/.codex,target=/home/vscode/.codex,type=bind,consistency=cached",
+      "reason": "Local-development trust boundary: shares the host's Codex CLI config and credentials (~/.codex, incl. auth tokens) read-write with the container so login and settings sync across devices like ~/.claude. Everything running in the container can read the token."
+    },
+    {
+      "files": [".devcontainer/alpine/devcontainer.json", ".devcontainer/debian/devcontainer.json"],
       "rule": "run-arg",
       "value": "--security-opt seccomp=unconfined",
       "reason": "Local-development trust boundary: disables the default seccomp filter, widening the container-escape surface. Kept for tooling that needs blocked syscalls; revisit and drop if no longer required."
@@ -40,7 +46,7 @@
     {
       "files": [".devcontainer/alpine/devcontainer.json", ".devcontainer/debian/devcontainer.json"],
       "rule": "host-command",
-      "value": "mkdir -p \"$HOME/.ssh\" \"$HOME/.claude\" && touch \"$HOME/.claude.json\"",
+      "value": "mkdir -p \"$HOME/.ssh\" \"$HOME/.claude\" \"$HOME/.codex\" && touch \"$HOME/.claude.json\"",
       "reason": "Runs on the HOST before the container starts (outside the sandbox). Only creates the directories/files that the bind mounts above need, so Docker does not create them as root."
     },
     {
